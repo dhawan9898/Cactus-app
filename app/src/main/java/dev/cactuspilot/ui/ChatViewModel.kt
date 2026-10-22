@@ -15,7 +15,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.cactuspilot.ai.AgentLoop
 import dev.cactuspilot.ai.ChatTurn
+import dev.cactuspilot.ai.ModelCatalog
 import dev.cactuspilot.ai.ModelRole
+import dev.cactuspilot.ai.ModelState
 import dev.cactuspilot.ai.Tool
 import dev.cactuspilot.ai.ToolRouter
 import dev.cactuspilot.ai.WebContext
@@ -23,11 +25,14 @@ import dev.cactuspilot.pilotApp
 import dev.cactuspilot.voice.PcmRecorder
 import dev.cactuspilot.voice.Speaker
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -49,7 +54,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val host = app.pilotApp.engineHost
     val modelStore = app.pilotApp.modelStore
     val settings = app.pilotApp.settings
-    private val chatStore = ChatStore(app)
+    private val convStore = ConversationStore(app)
     private val agent = AgentLoop(host, app)
     private val recorder = PcmRecorder()
     private val speaker = Speaker(app)
@@ -57,6 +62,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var nextId = 1L
 
     val messages = mutableStateListOf<UiMessage>()
+    val conversations = mutableStateListOf<ConversationMeta>()
+    var activeId by mutableStateOf<String?>(null)
+        private set
     var busy by mutableStateOf(false)
         private set
     /** What the assistant is doing right now ("Loading model…", "Thinking…"); null once text is streaming. */
@@ -76,13 +84,44 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val nativeAvailable get() = host.nativeAvailable
 
     init {
-        messages += chatStore.load()
+        var list = convStore.list()
+        if (list.isEmpty()) list = listOf(convStore.create())
+        conversations += list
+        switchTo(convStore.activeId?.takeIf { a -> list.any { it.id == a } } ?: list.first().id)
+    }
+
+    private fun switchTo(id: String) {
+        activeId = id
+        convStore.activeId = id
+        messages.clear()
+        messages += convStore.load(id)
         nextId = (messages.maxOfOrNull { it.id } ?: 0L) + 1
+        pendingImage = null
     }
 
     fun dismissBanner() { banner = null }
 
-    private fun persist() = chatStore.save(messages.toList())
+    /** First-run helper: downloads the default chat and voice models one after the other. */
+    fun quickSetup() {
+        viewModelScope.launch {
+            for (role in ModelRole.entries) {
+                val spec = ModelCatalog.defaultFor(role)
+                val state = modelStore.states.value[spec.id]
+                if (state is ModelState.Installed || state is ModelState.Downloading) continue
+                modelStore.download(spec)
+            }
+        }
+    }
+
+    private fun persist() {
+        val id = activeId ?: return
+        val updated = convStore.save(id, messages.toList()) ?: return
+        val i = conversations.indexOfFirst { it.id == id }
+        if (i >= 0) conversations[i] = updated
+        val sorted = conversations.sortedByDescending { it.updatedAt }
+        conversations.clear()
+        conversations.addAll(sorted)
+    }
 
     // ---- turns -----------------------------------------------------------------------------
 
@@ -182,11 +221,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         speaker.stop()
     }
 
+    /** Starts a fresh conversation (the current one stays in the list). No-op if the current one is empty. */
     fun newChat() {
         if (busy) return
-        messages.clear()
-        pendingImage = null
+        if (messages.none { it.text.isNotEmpty() }) return
         persist()
+        val meta = convStore.create()
+        conversations.add(0, meta)
+        switchTo(meta.id)
+    }
+
+    fun openConversation(id: String) {
+        if (busy || id == activeId) return
+        persist()
+        switchTo(id)
+    }
+
+    fun deleteConversation(id: String) {
+        if (busy) return
+        convStore.delete(id)
+        conversations.removeAll { it.id == id }
+        if (id == activeId) {
+            if (conversations.isEmpty()) conversations.add(convStore.create())
+            switchTo(conversations.first().id)
+        }
+    }
+
+    fun renameConversation(id: String, title: String) {
+        convStore.rename(id, title)
+        val i = conversations.indexOfFirst { it.id == id }
+        val clean = title.trim().take(60)
+        if (i >= 0 && clean.isNotEmpty()) conversations[i] = conversations[i].copy(title = clean)
     }
 
     // ---- image attach ----------------------------------------------------------------------
@@ -236,14 +301,69 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- voice -----------------------------------------------------------------------------
 
+    var liveText by mutableStateOf("")
+        private set
+    private var streamHandle = 0L
+    private var confirmedText = StringBuilder()
+    private var chunkQueue: Channel<ByteArray>? = null
+    private var liveJob: Job? = null
+    private val pendingChunk = ByteArrayOutputStream()
+
+    /**
+     * Starts the mic. If the voice model supports streaming, words appear live while you speak
+     * ([liveText]); otherwise the whole recording is transcribed when you stop.
+     */
     fun startRecording() {
         if (busy || recording || transcribing) return
         if (modelStore.activeSpec(ModelRole.SPEECH) == null) {
             banner = "Install a voice model first (Models → Whisper Base)."
             return
         }
-        recording = recorder.start(viewModelScope)
-        if (!recording) banner = "Could not start the microphone."
+        transcribing = true // spinner while the voice model loads
+        viewModelScope.launch {
+            try {
+                host.ensureLoaded(ModelRole.SPEECH)
+                confirmedText = StringBuilder()
+                liveText = ""
+                pendingChunk.reset()
+                val handle = try { host.speech.streamStart() } catch (e: Exception) { 0L }
+                streamHandle = handle
+                val queue = Channel<ByteArray>(Channel.UNLIMITED)
+                chunkQueue = queue
+                liveJob = if (handle != 0L) {
+                    launch {
+                        for (chunk in queue) {
+                            try {
+                                val t = host.speech.streamProcess(handle, chunk)
+                                confirmedText.append(t.confirmed)
+                                liveText = (confirmedText.toString() + t.pending).trim()
+                            } catch (e: Exception) {
+                                // Keep recording; the full recording is transcribed on stop if streaming fails.
+                            }
+                        }
+                    }
+                } else null
+                recording = recorder.start(viewModelScope) { chunk ->
+                    if (handle != 0L) {
+                        synchronized(pendingChunk) {
+                            pendingChunk.write(chunk)
+                            if (pendingChunk.size() >= STREAM_CHUNK_BYTES) {
+                                queue.trySend(pendingChunk.toByteArray())
+                                pendingChunk.reset()
+                            }
+                        }
+                    }
+                }
+                if (!recording) {
+                    banner = "Could not start the microphone."
+                    finishStream()
+                }
+            } catch (e: Exception) {
+                banner = e.message ?: "Could not start voice input"
+            } finally {
+                transcribing = false
+            }
+        }
     }
 
     fun stopRecordingAndSend() {
@@ -253,19 +373,39 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val pcm = recorder.stop()
+                synchronized(pendingChunk) {
+                    if (pendingChunk.size() > 0) {
+                        chunkQueue?.trySend(pendingChunk.toByteArray())
+                        pendingChunk.reset()
+                    }
+                }
+                var text = finishStream()
                 if (pcm.size < PcmRecorder.SAMPLE_RATE / 2) {
                     banner = "Recording too short."
                     return@launch
                 }
-                host.ensureLoaded(ModelRole.SPEECH)
-                val text = host.speech.transcribe(pcm)
+                if (text.isBlank()) text = host.speech.transcribe(pcm) // fallback: whole recording at once
                 if (text.isBlank()) banner = "Didn't catch that." else send(text)
             } catch (e: Exception) {
                 banner = e.message ?: "Transcription failed"
             } finally {
                 transcribing = false
+                liveText = ""
             }
         }
+    }
+
+    /** Ends the live stream (if any) and returns the full recognised text. */
+    private suspend fun finishStream(): String {
+        chunkQueue?.close()
+        chunkQueue = null
+        liveJob?.join()
+        liveJob = null
+        val handle = streamHandle
+        streamHandle = 0L
+        if (handle == 0L) return ""
+        val rest = try { host.speech.streamStop(handle) } catch (e: Exception) { "" }
+        return (confirmedText.toString() + rest).trim()
     }
 
     // ---- confirmations ---------------------------------------------------------------------
@@ -308,5 +448,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val MAX_IMAGE_SIDE = 1024
+        const val STREAM_CHUNK_BYTES = 16_000 // 0.5 s of 16 kHz PCM16
     }
 }

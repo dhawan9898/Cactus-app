@@ -25,10 +25,12 @@ class MainActivity : ComponentActivity() {
                 when (screen) {
                     "models" -> ModelsScreen(onBack = { screen = "chat" })
                     "settings" -> SettingsScreen(vm = vm, onBack = { screen = "chat" })
+                    "history" -> ConversationsScreen(vm = vm, onBack = { screen = "chat" })
                     else -> ChatScreen(
                         vm = vm,
                         onOpenModels = { screen = "models" },
                         onOpenSettings = { screen = "settings" },
+                        onOpenHistory = { screen = "history" },
                     )
                 }
             }

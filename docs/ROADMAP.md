@@ -14,20 +14,17 @@
 
 ## v0.2 (done)
 
-- [x] In-app updater (GitHub releases), settings screen, chat history persistence, camera capture
-
-## v0.2 (remaining)
-
-- Multiple conversations
-- Streaming transcription (`nativeStreamTranscribe*`) for live captions
-- Release-quality app icon, onboarding
-- Unit tests for JSON/zip/tool validation in CI before assembling
+- [x] In-app updater (GitHub releases), settings screen, camera capture
+- [x] Multiple conversations (history screen, rename/delete, auto titles, migration of the old single chat)
+- [x] Live captions while speaking (streaming transcription, with whole-recording fallback)
+- [x] Per-widget configuration (prompt + refresh interval per widget, edit from the widget)
+- [x] First-run quick setup (one-tap starter model download), themed monochrome app icon
+- [x] Unit tests run in CI before the APK is assembled
 
 ## v0.3
 
 - Accessibility-service agent actions (opt-in, with overlay)
 - Routines (trigger → prompt → tools)
-- Multiple widgets with individual prompts (Glance configuration activity)
 - RAG over user documents (`nativeRagQuery`, embeddings)
 
 ## Known risks

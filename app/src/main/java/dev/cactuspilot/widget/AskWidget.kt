@@ -1,5 +1,6 @@
 package dev.cactuspilot.widget
 
+import android.appwidget.AppWidgetManager
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
@@ -9,12 +10,14 @@ import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
 import androidx.glance.action.ActionParameters
+import androidx.glance.action.actionParametersOf
+import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
-import androidx.glance.action.actionStartActivity
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
 import androidx.glance.layout.Column
@@ -32,21 +35,26 @@ import dev.cactuspilot.ui.MainActivity
 import java.text.DateFormat
 import java.util.Date
 
+/** Key name matches AppWidgetManager.EXTRA_APPWIDGET_ID so the same extra works for both widget buttons and the system configure flow. */
+internal val WIDGET_ID_KEY = ActionParameters.Key<Int>(AppWidgetManager.EXTRA_APPWIDGET_ID)
+
 class AskWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val snap = WidgetStore.read(context)
-        provideContent { WidgetContent(snap) }
+        val widgetId = GlanceAppWidgetManager(context).getAppWidgetId(id)
+        val snap = WidgetStore.read(context, widgetId)
+        provideContent { WidgetContent(snap, widgetId) }
     }
 }
 
 @Composable
-private fun WidgetContent(snap: WidgetSnapshot) {
+private fun WidgetContent(snap: WidgetSnapshot, widgetId: Int) {
     val body = snap.answer.ifBlank { "Tap Refresh to ask: ${snap.prompt}" }
     val stamp = if (snap.updatedAt > 0) {
         DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(snap.updatedAt))
     } else {
         ""
     }
+    val params = actionParametersOf(WIDGET_ID_KEY to widgetId)
     GlanceTheme {
         Column(
             modifier = GlanceModifier
@@ -56,7 +64,8 @@ private fun WidgetContent(snap: WidgetSnapshot) {
                 .clickable(actionStartActivity<MainActivity>()),
         ) {
             Text(
-                text = "🌵 CactusPilot  $stamp",
+                text = "🌵 ${snap.prompt.take(28)}  $stamp",
+                maxLines = 1,
                 style = TextStyle(
                     color = GlanceTheme.colors.primary,
                     fontSize = 12.sp,
@@ -72,9 +81,9 @@ private fun WidgetContent(snap: WidgetSnapshot) {
             )
             Spacer(GlanceModifier.height(8.dp))
             Row {
-                Button(text = "Refresh", onClick = actionRunCallback<RefreshCallback>())
+                Button(text = "Refresh", onClick = actionRunCallback<RefreshCallback>(params))
                 Spacer(GlanceModifier.width(8.dp))
-                Button(text = "Ask", onClick = actionStartActivity<MainActivity>())
+                Button(text = "Edit", onClick = actionStartActivity<WidgetConfigActivity>(params))
             }
         }
     }
@@ -82,10 +91,18 @@ private fun WidgetContent(snap: WidgetSnapshot) {
 
 class RefreshCallback : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        WidgetScheduler.refreshNow(context)
+        WidgetScheduler.refreshNow(context, parameters[WIDGET_ID_KEY] ?: 0)
     }
 }
 
 class AskWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = AskWidget()
+
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        super.onDeleted(context, appWidgetIds)
+        appWidgetIds.forEach {
+            WidgetScheduler.cancel(context, it)
+            WidgetStore.remove(context, it)
+        }
+    }
 }

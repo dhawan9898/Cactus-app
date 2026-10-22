@@ -88,10 +88,16 @@ Adding a tool = one class + one line in `ToolRegistry`.
 ## 5. Widget design
 
 - Framework: Jetpack Glance 1.1 (`GlanceAppWidget`), Material 3 colour providers.
-- State: `WidgetStore` (SharedPreferences) – `prompt`, `answer`, `updatedAt`, `refreshMinutes`.
-- Update path: `WidgetWorker` → completion → `WidgetStore.save` → `AskWidget().updateAll(ctx)`.
-- Default prompt: "Give me a one-sentence motivational quote." so the widget shows something useful before configuration.
-- Constraints: WorkManager periodic minimum is 15 min; the worker needs the model installed, otherwise it stores a "Model not installed" message instead of failing silently.
+- **Each widget has its own state**, keyed by `appWidgetId` in `WidgetStore`: `prompt`, last `answer`, `updatedAt`, `refreshMinutes`.
+- **Configuration:** `WidgetConfigActivity` opens when a widget is added (cancelling it cancels the add) and from the widget's *Edit* button / long-press *Reconfigure*. The user sets the prompt and a refresh interval (manual … daily).
+- **Refresh:** `WidgetScheduler` keeps one periodic WorkManager job per widget (≥ 15 min, an Android limit) plus a one-off job for *Refresh*. `WidgetWorker` runs the prompt through the active chat model, stores the answer and calls `AskWidget().update()` for that widget. Deleting a widget cancels its job and clears its state.
+- The assistant's `configure_widget` tool edits the most recently configured widget (and tells the user to add one if none exists).
+- Constraint: the worker needs the model installed, otherwise the widget shows the error text instead of failing silently.
+
+## 5b. Conversations and voice
+
+- **Conversations:** `ConversationStore` keeps `filesDir/conversations/index.json` (id, title, updatedAt) plus one `<id>.json` per conversation, written atomically. Titles come from the first user message and can be renamed. The history screen opens, renames and deletes; *New chat* keeps the old one in the list (and does nothing if the current chat is empty). The single-chat file of older builds is imported on first run.
+- **Live captions:** while recording, 0.5 s PCM chunks are fed to the engine's streaming transcription (`confirmed` text is appended, `pending` replaces the tail) and shown above the composer. On stop the remaining text is flushed and sent. If the voice model cannot stream, or returns nothing, the whole recording is transcribed in one call instead.
 
 ## 6. Testing strategy
 

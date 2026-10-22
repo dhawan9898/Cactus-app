@@ -18,7 +18,7 @@ class PcmRecorder {
     private val out = ByteArrayOutputStream()
 
     @SuppressLint("MissingPermission")
-    fun start(scope: CoroutineScope): Boolean {
+    fun start(scope: CoroutineScope, onChunk: ((ByteArray) -> Unit)? = null): Boolean {
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minBuf <= 0) return false
         val rec = AudioRecord(
@@ -36,7 +36,10 @@ class PcmRecorder {
             val buf = ByteArray(minBuf)
             while (isActive && out.size() < MAX_BYTES) {
                 val n = rec.read(buf, 0, buf.size)
-                if (n > 0) synchronized(out) { out.write(buf, 0, n) }
+                if (n > 0) {
+                    synchronized(out) { out.write(buf, 0, n) }
+                    onChunk?.invoke(buf.copyOf(n))
+                }
             }
         }
         return true

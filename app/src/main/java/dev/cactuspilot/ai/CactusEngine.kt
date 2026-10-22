@@ -20,6 +20,8 @@ data class CompletionResult(
     val totalMs: Double,
 )
 
+data class StreamText(val confirmed: String, val pending: String)
+
 class EngineException(message: String) : Exception(message)
 
 /** Generation settings; maps 1:1 onto the engine's options JSON. */
@@ -112,6 +114,27 @@ class CactusEngine(private val label: String) {
         parseCompletion(buf, n).text.trim()
     }
 
+    /** Live transcription. Returns a stream handle, or 0 when the loaded model cannot stream. */
+    suspend fun streamStart(language: String = "en"): Long = withContext(dispatcher) {
+        val h = requireHandle()
+        CactusJNI.nativeStreamTranscribeStart(h, JSONObject().put("language", language).toString())
+    }
+
+    /** Feeds 16 kHz mono PCM16 audio. [StreamText.confirmed] is new final text to append; pending replaces the tail. */
+    suspend fun streamProcess(stream: Long, pcm16: ByteArray): StreamText = withContext(dispatcher) {
+        val buf = ByteArray(RESPONSE_BYTES)
+        val n = CactusJNI.nativeStreamTranscribeProcess(stream, pcm16, buf)
+        if (n < 0) throw EngineException("Live transcription failed: ${CactusJNI.nativeGetLastError()}")
+        EngineJson.parseStream(String(buf, 0, n.coerceAtMost(buf.size), Charsets.UTF_8))
+    }
+
+    /** Ends the stream; returns the remaining (not yet confirmed) text and frees the stream. */
+    suspend fun streamStop(stream: Long): String = withContext(dispatcher) {
+        val buf = ByteArray(RESPONSE_BYTES)
+        val n = CactusJNI.nativeStreamTranscribeStop(stream, buf)
+        if (n < 0) "" else EngineJson.parseStream(String(buf, 0, n.coerceAtMost(buf.size), Charsets.UTF_8)).confirmed
+    }
+
     private fun requireHandle(): Long {
         val h = handle
         if (h == 0L) throw EngineException("No model loaded ($label)")
@@ -160,6 +183,12 @@ object EngineJson {
             decodeTps = json.optDouble("decode_tps", 0.0),
             totalMs = json.optDouble("total_time_ms", 0.0),
         )
+    }
+
+    fun parseStream(raw: String): StreamText {
+        val json = JSONObject(raw.substringBefore('\u0000').trim())
+        if (!json.optBoolean("success", true)) throw EngineException(json.optString("error", "stream error"))
+        return StreamText(json.optString("confirmed", ""), json.optString("pending", ""))
     }
 
     fun message(role: String, content: String, imagePath: String? = null): JSONObject {

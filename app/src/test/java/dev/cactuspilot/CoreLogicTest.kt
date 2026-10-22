@@ -10,7 +10,10 @@ import dev.cactuspilot.ai.ModelStore
 import dev.cactuspilot.ai.ToolRegistry
 import dev.cactuspilot.ai.ToolRouter
 import dev.cactuspilot.ai.WebContext
+import dev.cactuspilot.ui.ConversationStore
+import dev.cactuspilot.ui.Kind
 import dev.cactuspilot.ui.MarkdownParser
+import dev.cactuspilot.ui.UiMessage
 import dev.cactuspilot.ui.MdBlock
 import dev.cactuspilot.update.UpdateManager
 import org.json.JSONObject
@@ -235,5 +238,33 @@ class CoreLogicTest {
     @Test fun noUpdateWhenCurrentIsNewestOrIgnoresDraftsAndNonApk() {
         val json = "[" + listOf(release("build-9", draft = true), release("build-8", apk = false), release("v1.0"), release("build-3")).joinToString(",") + "]"
         assertEquals(null, UpdateManager.pickLatest(json, currentBuild = 3))
+    }
+
+    @Test fun conversationTitleComesFromFirstLine() {
+        assertEquals("Explain black holes", ConversationStore.titleFrom("  Explain black holes\nin detail"))
+        assertEquals(ConversationStore.DEFAULT_TITLE, ConversationStore.titleFrom("   "))
+        val long = ConversationStore.titleFrom("x".repeat(100))
+        assertEquals(41, long.length)
+        assertTrue(long.endsWith("…"))
+    }
+
+    @Test fun conversationMessagesRoundTrip() {
+        val msgs = listOf(
+            UiMessage(1, "user", "hello"),
+            UiMessage(2, "assistant", "**hi**", stats = "10 tok/s"),
+            UiMessage(3, "tool", "⚙ set_timer", kind = Kind.TOOL),
+            UiMessage(4, "assistant", ""), // empty placeholders are not stored
+        )
+        val back = ConversationStore.decode(ConversationStore.encode(msgs))
+        assertEquals(3, back.size)
+        assertEquals("**hi**", back[1].text)
+        assertEquals("10 tok/s", back[1].stats)
+        assertEquals(Kind.TOOL, back[2].kind)
+    }
+
+    @Test fun streamResultIsParsed() {
+        val s = EngineJson.parseStream("""{"success":true,"confirmed":"hello ","pending":"wor","total_time_ms":3}""")
+        assertEquals("hello ", s.confirmed)
+        assertEquals("wor", s.pending)
     }
 }

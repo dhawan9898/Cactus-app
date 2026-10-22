@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -46,6 +47,7 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -77,6 +79,7 @@ import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import dev.cactuspilot.ai.ModelCatalog
 import dev.cactuspilot.ai.ModelRole
+import dev.cactuspilot.ai.ModelState
 import dev.cactuspilot.pilotApp
 import dev.cactuspilot.update.UpdateState
 import java.io.File
@@ -90,11 +93,17 @@ private val SUGGESTIONS = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit, onOpenSettings: () -> Unit) {
+fun ChatScreen(
+    vm: ChatViewModel,
+    onOpenModels: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenHistory: () -> Unit,
+) {
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val active by vm.modelStore.active.collectAsState()
     val chatSpec = ModelCatalog.byId(active[ModelRole.CHAT])
+    val modelStates by vm.modelStore.states.collectAsState()
     val updateState by ctx.pilotApp.updater.state.collectAsState()
 
     var input by remember { mutableStateOf("") }
@@ -140,6 +149,9 @@ fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit, onOpenSettings: () -
                         )
                     }
                 },
+                navigationIcon = {
+                    IconButton(onClick = onOpenHistory) { Icon(Icons.Default.Menu, "Conversations") }
+                },
                 actions = {
                     IconButton(onClick = vm::newChat, enabled = !vm.busy) { Icon(Icons.Default.Add, "New chat") }
                     IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, "Settings") }
@@ -159,6 +171,8 @@ fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit, onOpenSettings: () -
             if (vm.messages.isEmpty()) {
                 EmptyState(
                     hasModel = chatSpec != null,
+                    states = modelStates,
+                    onQuickSetup = vm::quickSetup,
                     onOpenModels = onOpenModels,
                     onSuggestion = ::submit,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -182,6 +196,10 @@ fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit, onOpenSettings: () -
                     }
                     item(key = "bottom") { Spacer(Modifier.height(1.dp)) }
                 }
+            }
+
+            if (vm.recording) {
+                Notice("🎙 " + vm.liveText.ifBlank { "Listening… speak now, tap ⏹ when done" }, null)
             }
 
             Composer(
@@ -228,6 +246,8 @@ fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit, onOpenSettings: () -
 @Composable
 private fun EmptyState(
     hasModel: Boolean,
+    states: Map<String, ModelState>,
+    onQuickSetup: () -> Unit,
     onOpenModels: () -> Unit,
     onSuggestion: (String) -> Unit,
     modifier: Modifier = Modifier,
@@ -247,7 +267,36 @@ private fun EmptyState(
         )
         Spacer(Modifier.height(20.dp))
         if (!hasModel) {
-            Button(onClick = onOpenModels) { Text("Download a model to start") }
+            val starter = ModelRole.entries.map { ModelCatalog.defaultFor(it) }
+            val downloading = starter.mapNotNull { s -> (states[s.id] as? ModelState.Downloading)?.let { s to it } }
+            val failed = starter.mapNotNull { s -> (states[s.id] as? ModelState.Failed)?.let { s to it } }
+            if (downloading.isNotEmpty()) {
+                for ((s, d) in downloading) {
+                    Text("${s.title}: ${d.phase} ${(d.fraction * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
+                    LinearProgressIndicator(
+                        progress = { d.fraction },
+                        modifier = Modifier.fillMaxWidth(0.8f).padding(vertical = 6.dp),
+                    )
+                }
+                Text("You can leave this screen; the download continues.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Quick setup", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "One-time download of about ${starter.sumOf { it.sizeMb }} MB: " +
+                                starter.joinToString(" and ") { it.title.substringBefore(" (") } +
+                                ". After that everything runs on your phone, even offline.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        failed.firstOrNull()?.let { (s, f) ->
+                            Text("${s.title} failed: ${f.message}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Button(onClick = onQuickSetup) { Text("Download starter models") }
+                        TextButton(onClick = onOpenModels) { Text("Choose other models") }
+                    }
+                }
+            }
         } else {
             for (s in SUGGESTIONS) {
                 AssistChip(

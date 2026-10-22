@@ -269,10 +269,11 @@ object ConfigureWidget : Tool {
     override suspend fun execute(ctx: Context, args: JSONObject): String {
         val p = args.strArg("prompt")
         need(p != null, "prompt is required")
-        val minutes = args.intArg("refresh_minutes")
-        WidgetStore.savePrompt(ctx, p!!, minutes)
-        if (minutes != null && minutes > 0) WidgetScheduler.schedule(ctx, minutes) else WidgetScheduler.cancel(ctx)
-        WidgetScheduler.refreshNow(ctx)
-        return "Widget prompt updated" + (minutes?.let { ", refreshing every ${it.coerceAtLeast(15)} min" } ?: "")
+        val minutes = args.intArg("refresh_minutes") ?: 0
+        val widgetId = WidgetStore.lastConfigured(ctx)
+        if (widgetId == 0) return "No CactusPilot widget found. Add one to the home screen first, then ask again."
+        WidgetStore.savePrompt(ctx, widgetId, p!!, minutes)
+        WidgetScheduler.apply(ctx, widgetId, minutes)
+        return "Widget prompt updated" + if (minutes > 0) ", refreshing every ${minutes.coerceAtLeast(15)} min" else ""
     }
 }
