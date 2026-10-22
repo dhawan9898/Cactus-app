@@ -73,7 +73,8 @@ class AgentLoop(private val host: EngineHost, private val appContext: Context) {
         /** Renders calls in the engine's chat-template form: `<|tool_call_start|>f(a="x")<|tool_call_end|>`. */
         fun renderCalls(calls: List<FunctionCall>): String = calls.joinToString("") { c ->
             val args = c.arguments.keys().asSequence().joinToString(", ") { k ->
-                "$k=${JSONObject.valueToString(c.arguments.get(k))}"
+                val v = c.arguments.get(k)
+                "$k=${if (v is String) JSONObject.quote(v) else v.toString()}"
             }
             "<|tool_call_start|>${c.name}($args)<|tool_call_end|>"
         }
