@@ -12,12 +12,15 @@
 
 > Not yet compiled or run on a device when this was written – the first CI run is the first compile. Expect a fix-up cycle.
 
-## v0.2
+## v0.2 (done)
 
-- Chat history persistence (Room) and multiple conversations
-- Camera capture (FileProvider) in addition to photo picker
+- [x] In-app updater (GitHub releases), settings screen, chat history persistence, camera capture
+
+## v0.2 (remaining)
+
+- Multiple conversations
 - Streaming transcription (`nativeStreamTranscribe*`) for live captions
-- Release-quality app icon, onboarding, settings screen (temperature, max tokens)
+- Release-quality app icon, onboarding
 - Unit tests for JSON/zip/tool validation in CI before assembling
 
 ## v0.3

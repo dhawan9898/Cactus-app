@@ -56,6 +56,15 @@ base64 -w0 release.p12   # paste into the ANDROID_KEYSTORE_BASE64 secret
 2. Push; CI rebuilds the native library.
 3. Re-test model loading – bundle formats may change between engine versions.
 
+## Updating an installed app
+
+Two paths, both install **over** the existing app and keep downloaded models and chats:
+
+1. **In-app (from the first build that includes it):** Settings → *Check for updates* → *Download & install*. The app also checks silently at launch (at most every 6 h) and shows a banner. It reads `https://api.github.com/repos/dhawan9898/Cactus-app/releases`, picks the highest `build-N` newer than its own `versionCode`, downloads the APK, **verifies the signing certificate matches the installed one**, then opens the system installer. The first time, Android asks you to allow "install unknown apps" for CactusPilot.
+2. **Manual:** download the APK from the Releases page and open it.
+
+Why updates work: every CI build is signed with the same key and `versionCode = run number` (always increasing). If you ever change the signing key, Android refuses the update and you must uninstall once.
+
 ## Manual smoke checklist (per release)
 
 - [ ] App installs over previous build; models still present
