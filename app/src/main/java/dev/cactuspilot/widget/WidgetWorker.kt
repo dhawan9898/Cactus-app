@@ -20,7 +20,7 @@ class WidgetWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
             val host = ctx.pilotApp.engineHost
             host.ensureLoaded(ModelRole.CHAT)
             val messages = JSONArray()
-                .put(EngineJson.message("system", AgentLoop.SYSTEM_PROMPT))
+                .put(EngineJson.message("system", AgentLoop.systemPrompt(withTools = false)))
                 .put(EngineJson.message("user", snap.prompt))
             host.chat.complete(messages, null, GenOptions(maxTokens = 160, temperature = 0.3)).text.trim()
         } catch (e: Exception) {

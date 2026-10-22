@@ -9,8 +9,8 @@ import dev.cactuspilot.update.UpdateManager
 /** Process-wide singletons (simple manual DI; shared by the UI and the widget worker). */
 class CactusPilotApp : Application() {
     val modelStore: ModelStore by lazy { ModelStore(this) }
-    val engineHost: EngineHost by lazy { EngineHost(modelStore) }
     val settings: AppSettings by lazy { AppSettings(this) }
+    val engineHost: EngineHost by lazy { EngineHost(modelStore) { settings.contextTokens } }
     val updater: UpdateManager by lazy { UpdateManager(this) }
 }
 

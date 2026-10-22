@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -27,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import dev.cactuspilot.AppSettings
 import dev.cactuspilot.pilotApp
 import dev.cactuspilot.update.UpdateManager
 import dev.cactuspilot.update.UpdateState
@@ -60,14 +62,30 @@ fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
 
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Generation", style = MaterialTheme.typography.titleMedium)
+                    Text("Memory & answers", style = MaterialTheme.typography.titleMedium)
+                    Text("Conversation memory: ${s.contextTokens / 1024}K tokens")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (c in AppSettings.CONTEXT_CHOICES) {
+                            FilterChip(
+                                selected = s.contextTokens == c,
+                                onClick = { s.updateContextTokens(c) },
+                                label = { Text("${c / 1024}K") },
+                            )
+                        }
+                    }
+                    Text(
+                        "How much of the chat the model keeps in mind. Bigger remembers more but uses more RAM and is slower. " +
+                            "Takes effect on your next message (the model reloads).",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     Text("Creativity (temperature): %.2f".format(s.temperature))
                     Slider(value = s.temperature, onValueChange = { s.updateTemperature(Math.round(it * 20) / 20f) }, valueRange = 0f..1.5f)
+                    Text("Lower = more focused and consistent. Higher = more varied.", style = MaterialTheme.typography.bodySmall)
                     Text("Max reply length: ${s.maxTokens} tokens")
                     Slider(
                         value = s.maxTokens.toFloat(),
-                        onValueChange = { s.updateMaxTokens((it / 64).toInt().coerceAtLeast(1) * 64) },
-                        valueRange = 64f..2048f,
+                        onValueChange = { s.updateMaxTokens((it / 128).toInt().coerceAtLeast(1) * 128) },
+                        valueRange = 128f..4096f,
                     )
                 }
             }
@@ -75,9 +93,14 @@ fun SettingsScreen(vm: ChatViewModel, onBack: () -> Unit) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Behaviour", style = MaterialTheme.typography.titleMedium)
+                    ToggleRow("Look things up on Wikipedia for fresher facts", s.webSearch) { s.updateWebSearch(it) }
+                    Text(
+                        "Sends your question to wikipedia.org and gives the excerpts to the model. Also available as the 🌐 chip in the chat box.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     ToggleRow("Let the assistant use device tools", s.toolsEnabled) { s.updateToolsEnabled(it) }
                     ToggleRow("Read replies aloud", s.speakReplies) { s.updateSpeakReplies(it) }
-                    OutlinedButton(onClick = vm::clearChat, enabled = !vm.busy) { Text("Clear conversation") }
+                    OutlinedButton(onClick = vm::newChat, enabled = !vm.busy) { Text("Start a new conversation") }
                 }
             }
         }

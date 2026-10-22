@@ -1,5 +1,6 @@
 package dev.cactuspilot.ai
 
+import android.system.Os
 import com.cactus.CactusJNI
 import com.cactus.CactusTokenCallback
 import kotlinx.coroutines.CoroutineDispatcher
@@ -23,10 +24,11 @@ class EngineException(message: String) : Exception(message)
 
 /** Generation settings; maps 1:1 onto the engine's options JSON. */
 data class GenOptions(
-    val maxTokens: Int = 512,
-    val temperature: Double = 0.7,
+    val maxTokens: Int = 1024,
+    val temperature: Double = 0.3,
     val topP: Double = 0.9,
     val topK: Int = 40,
+    val repetitionPenalty: Double = 1.05,
     val toolRagTopK: Int = 3,
 ) {
     fun toJson(): JSONObject = JSONObject()
@@ -34,6 +36,7 @@ data class GenOptions(
         .put("temperature", temperature)
         .put("top_p", topP)
         .put("top_k", topK)
+        .put("repetition_penalty", repetitionPenalty)
         .put("tool_rag_top_k", toolRagTopK)
         .put("auto_handoff", false) // stay fully on-device
 }
@@ -50,15 +53,25 @@ class CactusEngine(private val label: String) {
     @Volatile var loadedDir: String? = null
         private set
 
+    @Volatile var loadedContext: Int = 0
+        private set
+
     val isLoaded: Boolean get() = handle != 0L
 
-    suspend fun load(modelDir: String) = withContext(dispatcher) {
-        if (handle != 0L && loadedDir == modelDir) return@withContext
+    /**
+     * [contextTokens] sets how many tokens of conversation the engine keeps before it starts compacting
+     * its KV cache (older tokens are dropped past this point). The engine reads this from the environment
+     * when a model is created, so changing it requires a reload, which this method does automatically.
+     */
+    suspend fun load(modelDir: String, contextTokens: Int = DEFAULT_CONTEXT_TOKENS) = withContext(dispatcher) {
+        if (handle != 0L && loadedDir == modelDir && loadedContext == contextTokens) return@withContext
         unloadNow()
+        applyContextEnv(contextTokens)
         val h = CactusJNI.nativeInit(modelDir, null, false)
         if (h == 0L) throw EngineException("Could not load model: ${CactusJNI.nativeGetLastError()}")
         handle = h
         loadedDir = modelDir
+        loadedContext = contextTokens
     }
 
     suspend fun unload() = withContext(dispatcher) { unloadNow() }
@@ -110,8 +123,18 @@ class CactusEngine(private val label: String) {
         return EngineJson.parseCompletion(String(buf, 0, written.coerceAtMost(buf.size), Charsets.UTF_8))
     }
 
-    private companion object {
-        const val RESPONSE_BYTES = 128 * 1024
+    private fun applyContextEnv(tokens: Int) {
+        try {
+            Os.setenv("CACTUS_KV_COMPRESS_AT", tokens.toString(), true)
+            Os.setenv("CACTUS_KV_COMPRESS_TO", (tokens * 3 / 4).toString(), true)
+        } catch (_: Exception) {
+            // Falls back to the engine default (compaction at 4096 tokens).
+        }
+    }
+
+    companion object {
+        const val DEFAULT_CONTEXT_TOKENS = 8192
+        private const val RESPONSE_BYTES = 128 * 1024
     }
 }
 

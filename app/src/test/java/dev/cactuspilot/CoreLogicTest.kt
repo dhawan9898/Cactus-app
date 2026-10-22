@@ -8,6 +8,10 @@ import dev.cactuspilot.ai.FunctionCall
 import dev.cactuspilot.ai.ModelCatalog
 import dev.cactuspilot.ai.ModelStore
 import dev.cactuspilot.ai.ToolRegistry
+import dev.cactuspilot.ai.ToolRouter
+import dev.cactuspilot.ai.WebContext
+import dev.cactuspilot.ui.MarkdownParser
+import dev.cactuspilot.ui.MdBlock
 import dev.cactuspilot.update.UpdateManager
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -50,11 +54,110 @@ class CoreLogicTest {
         assertEquals("/tmp/a.jpg", m.getJSONArray("images").getString(0))
     }
 
-    @Test fun historyIsTrimmedAndStartsWithSystem() {
-        val turns = (1..30).map { ChatTurn(if (it % 2 == 1) "user" else "assistant", "m$it") }
-        val msgs = AgentLoop.buildMessages(turns)
-        assertEquals(AgentLoop.MAX_HISTORY_TURNS + 1, msgs.length())
+    @Test fun oldTurnsAreDroppedWhenOverBudgetButLatestUserTurnStays() {
+        val turns = (1..39).map { ChatTurn(if (it % 2 == 1) "user" else "assistant", "message number $it ".repeat(20)) }
+        val msgs = AgentLoop.buildMessages(turns, "sys", budgetTokens = 600)
+        assertTrue(msgs.length() < 40)
         assertEquals("system", msgs.getJSONObject(0).getString("role"))
+        assertEquals("user", msgs.getJSONObject(1).getString("role"))
+        assertEquals("user", msgs.getJSONObject(msgs.length() - 1).getString("role"))
+        assertTrue(msgs.getJSONObject(msgs.length() - 1).getString("content").contains("message number 39"))
+    }
+
+    @Test fun wholeConversationIsKeptWhenItFits() {
+        val turns = listOf(
+            ChatTurn("user", "Who wrote Dune?"),
+            ChatTurn("assistant", "Frank Herbert."),
+            ChatTurn("user", "When was it published?"),
+        )
+        val msgs = AgentLoop.buildMessages(turns, "sys", budgetTokens = 8000)
+        assertEquals(4, msgs.length())
+        assertEquals("Who wrote Dune?", msgs.getJSONObject(1).getString("content"))
+    }
+
+    @Test fun onlyTheLatestImageStaysAttached() {
+        val turns = listOf(
+            ChatTurn("user", "what is this", "/a.jpg"),
+            ChatTurn("assistant", "a cat"),
+            ChatTurn("user", "and this", "/b.jpg"),
+            ChatTurn("assistant", "a dog"),
+            ChatTurn("user", "which is bigger?"),
+        )
+        val msgs = AgentLoop.buildMessages(turns, "sys", budgetTokens = 8000)
+        assertTrue(!msgs.getJSONObject(1).has("images"))
+        assertEquals("/b.jpg", msgs.getJSONObject(3).getJSONArray("images").getString(0))
+    }
+
+    @Test fun webContextOnlyGoesIntoLatestUserTurn() {
+        val turns = listOf(ChatTurn("user", "first"), ChatTurn("assistant", "ok"), ChatTurn("user", "latest?"))
+        val msgs = AgentLoop.buildMessages(turns, "sys", 8000, webContext = "WEB-EXCERPT")
+        assertTrue(!msgs.getJSONObject(1).getString("content").contains("WEB-EXCERPT"))
+        assertTrue(msgs.getJSONObject(3).getString("content").contains("WEB-EXCERPT"))
+        assertTrue(msgs.getJSONObject(3).getString("content").endsWith("latest?"))
+    }
+
+    @Test fun systemPromptHasDateAndToolsHintOnlyWhenNeeded() {
+        val now = java.time.LocalDateTime.of(2026, 10, 22, 9, 30)
+        val plain = AgentLoop.systemPrompt(false, now)
+        assertTrue(plain.contains("22 October 2026"))
+        assertTrue(plain.contains("09:30"))
+        assertTrue(!plain.contains("call the matching tool"))
+        assertTrue(AgentLoop.systemPrompt(true, now).contains("call the matching tool"))
+    }
+
+    @Test fun toolsAreOnlyOfferedForDeviceActions() {
+        assertTrue(ToolRouter.wanted("Set a timer for 5 minutes"))
+        assertTrue(ToolRouter.wanted("open the camera"))
+        assertTrue(ToolRouter.wanted("what time is it"))
+        assertTrue(!ToolRouter.wanted("Explain how photosynthesis works"))
+        assertTrue(!ToolRouter.wanted("Who wrote Dune?"))
+    }
+
+    @Test fun wikipediaResponseIsParsedInRankOrder() {
+        val json = """{"query":{"pages":{
+            "2":{"title":"B","index":2,"extract":"second"},
+            "1":{"title":"A","index":1,"extract":"first"},
+            "3":{"title":"C","index":3,"extract":""}}}}"""
+        val hits = WebContext.parse(json)
+        assertEquals(listOf("A", "B"), hits.map { it.title })
+        assertEquals("" , WebContext.parse("""{"batchcomplete":""}""").firstOrNull()?.title ?: "")
+        assertTrue(WebContext.format(hits, "2026-10-22").contains("[1] A: first"))
+    }
+
+    @Test fun questionsAreTurnedIntoSearchPhrases() {
+        assertEquals("capital of France", WebContext.toQuery("What is the capital of France?"))
+        assertEquals("quantum computing", WebContext.toQuery("Tell me about quantum computing"))
+    }
+
+    @Test fun markdownBlocksAreParsed() {
+        val md = """
+            # Title
+            Some **bold** text
+            continues here.
+
+            - one
+            - two
+            1. first
+
+            ```kotlin
+            val x = 1
+            ```
+            > quoted
+            ---
+        """.trimIndent()
+        val blocks = MarkdownParser.parse(md)
+        assertEquals(MdBlock.Heading(1, "Title"), blocks[0])
+        assertEquals(MdBlock.Paragraph("Some **bold** text\ncontinues here."), blocks[1])
+        assertEquals(MdBlock.ListItem("one", false, 0, 0), blocks[2])
+        assertEquals(MdBlock.ListItem("first", true, 1, 0), blocks[4])
+        assertEquals(MdBlock.Code("kotlin", "val x = 1"), blocks[5])
+        assertEquals(MdBlock.Quote("quoted"), blocks[6])
+        assertEquals(MdBlock.Rule, blocks[7])
+    }
+
+    @Test fun unterminatedCodeFenceWhileStreamingIsStillCode() {
+        val blocks = MarkdownParser.parse("Here:\n```python\nprint(1)")
+        assertEquals(MdBlock.Code("python", "print(1)"), blocks.last())
     }
 
     @Test fun rendersToolCallsInTemplateForm() {

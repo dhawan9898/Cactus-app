@@ -32,17 +32,23 @@ Selection rules: one active chat model, one active speech model, stored in `Shar
 - Never block the UI thread; every engine call is a suspend function.
 - Show *why* something is unavailable (no model, no mic permission, no vision model) instead of disabling silently.
 
-## 3. Prompts
+## 3. Prompts, memory and answer quality
 
-System prompt (kept short for small models):
+**What the engine does (verified in the Cactus v2.2.2 source and the bundle):**
+- The engine is stateless per call: we send the whole conversation every time and it reuses its KV cache for the unchanged prefix.
+- The bundles allow a cache of up to 128k tokens. The only built-in limit is *rolling KV compaction*: once a chat passes 4096 tokens the engine compacts the cache to 2048, which drops older context. It reads `CACTUS_KV_COMPRESS_AT/TO` from the environment when a model is created, so the app sets them from the **Conversation memory** setting (4K / **8K** / 16K / 32K) and reloads the model when it changes.
+- When tools are passed, their JSON goes into the system prompt on every call. Small models answer ordinary questions worse with ten tool definitions in the prompt.
 
-```
-You are CactusPilot, a helpful assistant running privately on the user's phone.
-Be concise. When the user asks you to do something on the device, call the
-matching tool instead of describing how to do it.
-```
+**What the app does about it:**
+- **Token-budgeted history** instead of a fixed number of turns: the oldest turns are dropped only when the estimated prompt would exceed `memory − reply length − reserve`. The prompt always keeps the system message and the latest user turn.
+- **Only the latest image** stays attached to the history (images cost ~300+ tokens each), so follow-up questions about it still work.
+- **Tools only when the message looks like a device action** (`ToolRouter`), otherwise plain chat.
+- **System prompt** with the current date/time, instructions to use the whole conversation, to admit uncertainty about recent events, and to answer in Markdown.
+- **Calmer sampling by default:** temperature 0.3, repetition penalty 1.05, top-p 0.9, top-k 40, reply up to 1024 tokens (adjustable up to 4096).
+- **Optional Wikipedia grounding** (🌐 chip / Settings): the question is searched on Wikipedia and the top excerpts are given to the model for that turn only. This is how the app gets fresher facts than the model's training data; it is not a general web search.
+- **Model choice matters most:** the 450M model has little knowledge and weak multi-turn reasoning. Gemma 4 E2B is far better and is marked as recommended.
 
-Generation defaults: `max_tokens=512`, `temperature=0.7`, `top_p=0.9`, `top_k=40`, `auto_handoff=false`, `tool_rag_top_k=3`. Widget refresh uses `max_tokens=160`, `temperature=0.3`.
+Answers are rendered as Markdown (headings, lists, bold/italic, inline code, fenced code blocks with a Copy button, quotes, links) while they stream.
 
 ## 4. Tool system
 

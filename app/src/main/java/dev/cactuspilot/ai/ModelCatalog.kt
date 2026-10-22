@@ -30,12 +30,12 @@ object ModelCatalog {
         ModelSpec(
             "lfm2-vl-450m", "LFM2-VL 450M (fast)", ModelRole.CHAT,
             "LFM2-VL-450M", "v2.0", "lfm2-vl-450m-cq4.zip", 383, vision = true,
-            note = "Chat + image understanding. Best default for most phones.",
+            note = "Fast and light, with image understanding. Small models have limited knowledge and reasoning; use Gemma 4 for better answers.",
         ),
         ModelSpec(
             "gemma4-e2b", "Gemma 4 E2B (large)", ModelRole.CHAT,
             "gemma-4-E2B-it", "v2.0.1", "gemma-4-e2b-it-cq4.zip", 2721, vision = true,
-            note = "Highest quality, big download. Recommended for phones with 8 GB+ RAM.",
+            note = "Recommended for quality: much stronger knowledge, reasoning and conversation. Big download; best on 8 GB+ RAM phones.",
         ),
         ModelSpec(
             "whisper-base", "Whisper Base (voice input)", ModelRole.SPEECH,

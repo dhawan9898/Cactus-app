@@ -17,6 +17,8 @@ import dev.cactuspilot.ai.AgentLoop
 import dev.cactuspilot.ai.ChatTurn
 import dev.cactuspilot.ai.ModelRole
 import dev.cactuspilot.ai.Tool
+import dev.cactuspilot.ai.ToolRouter
+import dev.cactuspilot.ai.WebContext
 import dev.cactuspilot.pilotApp
 import dev.cactuspilot.voice.PcmRecorder
 import dev.cactuspilot.voice.Speaker
@@ -24,8 +26,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 enum class Kind { TEXT, TOOL, ERROR }
 
@@ -42,7 +47,7 @@ class PendingConfirm(val tool: String, val args: String, val answer: Completable
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val host = app.pilotApp.engineHost
-    private val store = app.pilotApp.modelStore
+    val modelStore = app.pilotApp.modelStore
     val settings = app.pilotApp.settings
     private val chatStore = ChatStore(app)
     private val agent = AgentLoop(host, app)
@@ -53,6 +58,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     val messages = mutableStateListOf<UiMessage>()
     var busy by mutableStateOf(false)
+        private set
+    /** What the assistant is doing right now ("Loading model…", "Thinking…"); null once text is streaming. */
+    var status by mutableStateOf<String?>(null)
         private set
     var recording by mutableStateOf(false)
         private set
@@ -66,7 +74,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         private set
 
     val nativeAvailable get() = host.nativeAvailable
-    val activeChat get() = store.activeSpec(ModelRole.CHAT)
 
     init {
         messages += chatStore.load()
@@ -77,45 +84,94 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun persist() = chatStore.save(messages.toList())
 
-    // ---- text / image turn ----------------------------------------------------------------
+    // ---- turns -----------------------------------------------------------------------------
 
     fun send(text: String) {
-        val prompt = text.trim()
-        if (prompt.isEmpty() || busy) return
+        if (busy) return
         val image = pendingImage
+        var prompt = text.trim()
+        if (prompt.isEmpty() && image != null) prompt = "Describe this image."
+        if (prompt.isEmpty()) return
         pendingImage = null
-        val spec = store.activeSpec(ModelRole.CHAT)
+
+        val spec = modelStore.activeSpec(ModelRole.CHAT)
         // Only hand images to models that can see; otherwise drop with a note.
         val usableImage = if (spec?.vision == true) image else null
         if (image != null && usableImage == null) banner = "The active model cannot read images; sent as text only."
 
         messages += UiMessage(nextId++, "user", prompt, usableImage)
+        generate()
+    }
+
+    /** Re-answers the latest user message (drops the previous answer and any tool cards after it). */
+    fun regenerate() {
+        if (busy) return
+        val lastUser = messages.indexOfLast { it.role == "user" && it.kind == Kind.TEXT }
+        if (lastUser < 0) return
+        while (messages.size > lastUser + 1) messages.removeAt(messages.lastIndex)
+        generate()
+    }
+
+    private fun generate() {
         val replyId = nextId++
         messages += UiMessage(replyId, "assistant", "")
         busy = true
+        status = "Preparing…"
 
-        val history = messages.filter { it.kind == Kind.TEXT && it.id != replyId && it.text.isNotEmpty() }
+        val history = messages
+            .filter { it.kind == Kind.TEXT && it.id != replyId && it.text.isNotEmpty() }
             .map { ChatTurn(it.role, it.text, it.imagePath) }
+        val question = history.lastOrNull { it.role == "user" }?.text.orEmpty()
 
         viewModelScope.launch {
             val sb = StringBuilder()
+            var sources: String? = null
             try {
-                val result = agent.run(
+                var web: String? = null
+                if (settings.webSearch) {
+                    status = "Searching Wikipedia…"
+                    val hits = try {
+                        withTimeoutOrNull(9_000) { WebContext.search(question) }
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (!hits.isNullOrEmpty()) {
+                        web = WebContext.format(hits, LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+                        sources = "🌐 " + hits.joinToString(" · ") { it.title }
+                    }
+                }
+                val request = AgentLoop.Request(
                     history = history,
-                    useTools = settings.toolsEnabled,
+                    useTools = settings.toolsEnabled && ToolRouter.wanted(question),
                     options = settings.genOptions(),
+                    contextTokens = settings.contextTokens,
+                    webContext = web,
+                )
+                val result = agent.run(
+                    req = request,
                     confirm = ::askConfirmation,
-                    onToken = { t -> main.post { sb.append(t); setText(replyId, sb.toString()) } },
+                    onStatus = { s -> main.post { status = s } },
+                    onToken = { t ->
+                        main.post {
+                            if (status != null) status = null
+                            sb.append(t)
+                            setText(replyId, sb.toString())
+                        }
+                    },
                     onClear = { main.post { sb.clear(); setText(replyId, "") } },
                     onToolEvent = { e -> main.post { insertBefore(replyId, toolMessage(e.name, e.args, e.result)) } },
                 )
-                val stats = "%.1f tok/s · first token %.0f ms".format(result.decodeTps, result.ttftMs)
+                val stats = buildString {
+                    append("%.1f tok/s · first token %.1f s".format(result.decodeTps, result.ttftMs / 1000.0))
+                    sources?.let { append('\n').append(it) }
+                }
                 updateMessage(replyId) { it.copy(text = result.text.trim().ifEmpty { "(no response)" }, stats = stats) }
                 if (settings.speakReplies) speaker.speak(result.text)
             } catch (e: Exception) {
                 updateMessage(replyId) { it.copy(text = e.message ?: "Something went wrong", kind = Kind.ERROR) }
             } finally {
                 busy = false
+                status = null
                 persist()
             }
         }
@@ -126,9 +182,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         speaker.stop()
     }
 
-    fun clearChat() {
+    fun newChat() {
         if (busy) return
         messages.clear()
+        pendingImage = null
         persist()
     }
 
@@ -137,8 +194,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun attachImage(uri: Uri) {
         viewModelScope.launch {
             pendingImage = withContext(Dispatchers.IO) { copyDownscaled(uri) }
-            if (pendingImage == null) banner = "Could not read that image."
-            else if (store.activeSpec(ModelRole.CHAT)?.vision != true) {
+            if (pendingImage == null) {
+                banner = "Could not read that image."
+            } else if (modelStore.activeSpec(ModelRole.CHAT)?.vision != true) {
                 banner = "Active model is text-only. Switch to a vision model in Models."
             }
         }
@@ -180,8 +238,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startRecording() {
         if (busy || recording || transcribing) return
-        if (store.activeSpec(ModelRole.SPEECH) == null) {
-            banner = "Install a voice model first (Models → Whisper Tiny)."
+        if (modelStore.activeSpec(ModelRole.SPEECH) == null) {
+            banner = "Install a voice model first (Models → Whisper Base)."
             return
         }
         recording = recorder.start(viewModelScope)

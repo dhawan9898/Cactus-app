@@ -52,6 +52,20 @@ object ToolRegistry {
     }
 }
 
+/**
+ * Small models answer ordinary questions worse when ten tool definitions are stuffed into every prompt,
+ * so tools are only offered when the message looks like a request for a device action.
+ */
+object ToolRouter {
+    private val ACTION = Regex(
+        "\\b(alarm|timer|remind(er)?|wake me|call|dial|phone|sms|whatsapp|send (a |an )?(text|message)|open|launch|" +
+            "flashlight|torch|battery|what time|what's the time|what day|today's date|widget|google|browse|website|url|link)\\b",
+        RegexOption.IGNORE_CASE,
+    )
+
+    fun wanted(text: String): Boolean = ACTION.containsMatchIn(text)
+}
+
 // ---- schema + argument helpers -------------------------------------------------------------
 
 internal fun schema(required: List<String> = emptyList(), vararg props: Pair<String, JSONObject>): JSONObject {

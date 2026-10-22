@@ -4,7 +4,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /** Owns the two engine handles (chat + speech) and loads whatever model is currently active. */
-class EngineHost(private val store: ModelStore) {
+class EngineHost(private val store: ModelStore, private val contextTokens: () -> Int) {
     val chat = CactusEngine("chat")
     val speech = CactusEngine("speech")
     private val loadLock = Mutex()
@@ -27,6 +27,6 @@ class EngineHost(private val store: ModelStore) {
                 if (role == ModelRole.CHAT) "No chat model installed. Open Models and download one."
                 else "No voice model installed. Open Models and download one.",
             )
-        engine.load(dir)
+        engine.load(dir, contextTokens())
     }
 }
