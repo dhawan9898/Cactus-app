@@ -115,7 +115,9 @@ jobs:
           prerelease: true
           target_commitish: ${{ github.sha }}
           body: |
-            Automated build of `${{ github.sha }}`.
-            Install on an **arm64** Android phone (allow installs from unknown sources).
-            Engine: Cactus `${{ env.CACTUS_REF }}`.
+            ${{ github.event.head_commit.message }}
+
+            ---
+            Build of `${{ github.sha }}` · Engine: Cactus `${{ env.CACTUS_REF }}`.
+            Arm64 Android only. The installed app can update itself from Settings → Check for updates.
           files: ${{ steps.apk.outputs.name }}

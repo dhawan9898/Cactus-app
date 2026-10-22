@@ -27,6 +27,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -36,6 +38,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,12 +53,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
+import dev.cactuspilot.pilotApp
+import dev.cactuspilot.update.UpdateState
+import android.net.Uri
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit) {
+fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit, onOpenSettings: () -> Unit) {
     val ctx = LocalContext.current
+    val updateState by ctx.pilotApp.updater.state.collectAsState()
+    var attachMenu by remember { mutableStateOf(false) }
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val last = vm.messages.lastOrNull()
@@ -67,6 +76,9 @@ fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit) {
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) vm.attachImage(uri)
     }
+    val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) cameraUri?.let { vm.attachImage(it) }
+    }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.startRecording()
     }
@@ -76,11 +88,11 @@ fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit) {
             TopAppBar(
                 title = { Text("🌵 CactusPilot") },
                 actions = {
-                    TextButton(onClick = { vm.speakReplies = !vm.speakReplies }) {
-                        Text(if (vm.speakReplies) "🔊 On" else "🔈 Off")
+                    TextButton(onClick = { vm.settings.updateSpeakReplies(!vm.settings.speakReplies) }) {
+                        Text(if (vm.settings.speakReplies) "🔊" else "🔈")
                     }
-                    TextButton(onClick = vm::clearChat, enabled = !vm.busy) { Text("Clear") }
                     TextButton(onClick = onOpenModels) { Text("Models") }
+                    TextButton(onClick = onOpenSettings) { Text("⚙") }
                 },
             )
         },
@@ -92,6 +104,9 @@ fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit) {
                 Notice("No chat model yet. Download one to start.", "Open Models" to onOpenModels)
             }
             vm.banner?.let { Notice(it, "Dismiss" to vm::dismissBanner) }
+            (updateState as? UpdateState.Available)?.let { u ->
+                Notice("Update available: ${u.info.versionName}", "Details" to onOpenSettings)
+            }
 
             LazyColumn(
                 state = listState,
@@ -117,9 +132,27 @@ fun ChatScreen(vm: ChatViewModel, onOpenModels: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                TextButton(onClick = {
-                    pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                }) { Text("🖼") }
+                Box {
+                    TextButton(onClick = { attachMenu = true }) { Text("＋") }
+                    DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("🖼  Photo library") },
+                            onClick = {
+                                attachMenu = false
+                                pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("📷  Camera") },
+                            onClick = {
+                                attachMenu = false
+                                val uri = vm.newCameraUri()
+                                cameraUri = uri
+                                takePicture.launch(uri)
+                            },
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = input, onValueChange = { input = it },
                     modifier = Modifier.weight(1f),

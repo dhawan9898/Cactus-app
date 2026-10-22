@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.cactuspilot.ai.AgentLoop
@@ -42,6 +43,8 @@ class PendingConfirm(val tool: String, val args: String, val answer: Completable
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val host = app.pilotApp.engineHost
     private val store = app.pilotApp.modelStore
+    val settings = app.pilotApp.settings
+    private val chatStore = ChatStore(app)
     private val agent = AgentLoop(host, app)
     private val recorder = PcmRecorder()
     private val speaker = Speaker(app)
@@ -61,12 +64,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var banner by mutableStateOf<String?>(null)
         private set
-    var speakReplies by mutableStateOf(false)
 
     val nativeAvailable get() = host.nativeAvailable
     val activeChat get() = store.activeSpec(ModelRole.CHAT)
 
+    init {
+        messages += chatStore.load()
+        nextId = (messages.maxOfOrNull { it.id } ?: 0L) + 1
+    }
+
     fun dismissBanner() { banner = null }
+
+    private fun persist() = chatStore.save(messages.toList())
 
     // ---- text / image turn ----------------------------------------------------------------
 
@@ -93,7 +102,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val result = agent.run(
                     history = history,
-                    useTools = true,
+                    useTools = settings.toolsEnabled,
+                    options = settings.genOptions(),
                     confirm = ::askConfirmation,
                     onToken = { t -> main.post { sb.append(t); setText(replyId, sb.toString()) } },
                     onClear = { main.post { sb.clear(); setText(replyId, "") } },
@@ -101,11 +111,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 val stats = "%.1f tok/s · first token %.0f ms".format(result.decodeTps, result.ttftMs)
                 updateMessage(replyId) { it.copy(text = result.text.trim().ifEmpty { "(no response)" }, stats = stats) }
-                if (speakReplies) speaker.speak(result.text)
+                if (settings.speakReplies) speaker.speak(result.text)
             } catch (e: Exception) {
                 updateMessage(replyId) { it.copy(text = e.message ?: "Something went wrong", kind = Kind.ERROR) }
             } finally {
                 busy = false
+                persist()
             }
         }
     }
@@ -118,6 +129,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun clearChat() {
         if (busy) return
         messages.clear()
+        persist()
     }
 
     // ---- image attach ----------------------------------------------------------------------
@@ -134,6 +146,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun removeImage() { pendingImage = null }
 
+    /** Fresh FileProvider Uri for the camera app to write a photo into. */
+    fun newCameraUri(): Uri {
+        val app = getApplication<Application>()
+        val dir = File(app.cacheDir, "camera").apply { mkdirs() }
+        val file = File(dir, "cam_${System.currentTimeMillis()}.jpg")
+        return FileProvider.getUriForFile(app, "${app.packageName}.files", file)
+    }
+
     private fun copyDownscaled(uri: Uri): String? = try {
         val resolver = getApplication<Application>().contentResolver
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -147,7 +167,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val out = if (scale < 1f) {
                 Bitmap.createScaledBitmap(bmp, (bmp.width * scale).toInt(), (bmp.height * scale).toInt(), true)
             } else bmp
-            val file = File(getApplication<Application>().cacheDir, "img_${System.currentTimeMillis()}.jpg")
+            val dir = File(getApplication<Application>().filesDir, "chat_images").apply { mkdirs() }
+            val file = File(dir, "img_${System.currentTimeMillis()}.jpg")
             file.outputStream().use { out.compress(Bitmap.CompressFormat.JPEG, 90, it) }
             file.absolutePath
         }

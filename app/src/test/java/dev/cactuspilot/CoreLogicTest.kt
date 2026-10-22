@@ -8,6 +8,7 @@ import dev.cactuspilot.ai.FunctionCall
 import dev.cactuspilot.ai.ModelCatalog
 import dev.cactuspilot.ai.ModelStore
 import dev.cactuspilot.ai.ToolRegistry
+import dev.cactuspilot.update.UpdateManager
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -115,5 +116,21 @@ class CoreLogicTest {
         val inner = File(dir, "wrapper").apply { mkdirs() }
         File(inner, "config.txt").writeText("x")
         assertEquals(inner.canonicalPath, ModelStore.resolveBundleDir(dir).canonicalPath)
+    }
+
+    private fun release(tag: String, apk: Boolean = true, draft: Boolean = false) = """
+        {"tag_name":"$tag","name":"CactusPilot $tag","draft":$draft,"body":"notes",
+         "assets":[${if (apk) """{"name":"CactusPilot.apk","size":10,"browser_download_url":"https://x/$tag.apk"}""" else ""}]}"""
+
+    @Test fun picksNewestBuildAboveCurrent() {
+        val json = "[" + listOf(release("build-4"), release("build-7"), release("build-5")).joinToString(",") + "]"
+        val info = UpdateManager.pickLatest(json, currentBuild = 4)
+        assertEquals(7, info!!.build)
+        assertEquals("https://x/build-7.apk", info.apkUrl)
+    }
+
+    @Test fun noUpdateWhenCurrentIsNewestOrIgnoresDraftsAndNonApk() {
+        val json = "[" + listOf(release("build-9", draft = true), release("build-8", apk = false), release("v1.0"), release("build-3")).joinToString(",") + "]"
+        assertEquals(null, UpdateManager.pickLatest(json, currentBuild = 3))
     }
 }
