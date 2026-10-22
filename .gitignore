@@ -1,0 +1,11 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+captures/
+# Native engine is built by CI
+app/src/main/jniLibs/
+vendor/
+native-out/

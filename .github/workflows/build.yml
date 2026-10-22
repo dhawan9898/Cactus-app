@@ -1,0 +1,120 @@
+name: Build & Release APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CACTUS_REF: v2.2.2
+  NDK_VERSION: 27.2.12479018
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK and CMake
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;${NDK_VERSION}" "cmake;3.22.1"
+
+      - name: Fetch Cactus engine source
+        run: git clone --depth 1 --branch "$CACTUS_REF" https://github.com/cactus-compute/cactus.git vendor/cactus
+
+      - name: Restore native library cache
+        id: native-cache
+        uses: actions/cache@v4
+        with:
+          path: native-out
+          key: cactus-native-${{ env.CACTUS_REF }}-ndk${{ env.NDK_VERSION }}-v1
+
+      - name: Build Cactus engine (arm64-v8a)
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${NDK_VERSION}"
+          export PATH="$ANDROID_HOME/cmake/3.22.1/bin:$PATH"
+          bash vendor/cactus/android/build.sh
+          mkdir -p native-out
+          SO=$(find vendor/cactus -name libcactus_engine.so | head -1)
+          test -n "$SO" || { echo "libcactus_engine.so not found"; exit 1; }
+          cp "$SO" native-out/libcactus_engine.so
+
+      - name: Stage native library and bindings
+        run: |
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          cp native-out/libcactus_engine.so app/src/main/jniLibs/arm64-v8a/
+          READELF="$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          echo "NEEDED entries:"
+          "$READELF" -d native-out/libcactus_engine.so | grep NEEDED || true
+          if "$READELF" -d native-out/libcactus_engine.so | grep -q 'libc++_shared.so'; then
+            cp "$ANDROID_HOME/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" \
+               app/src/main/jniLibs/arm64-v8a/
+            echo "Bundled libc++_shared.so"
+          fi
+          for f in Cactus.kt CactusCallbacks.kt; do
+            cp "vendor/cactus/bindings/kotlin/$f" "app/src/main/java/com/cactus/$f"
+          done
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode signing key (optional secret)
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            echo "KEYSTORE_PATH=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "Using secret keystore"
+          else
+            echo "Using bundled test keystore"
+          fi
+
+      - name: Unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Assemble release APK
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Name the APK
+        id: apk
+        run: |
+          VERSION="0.1.${{ github.run_number }}"
+          SRC=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          DEST="CactusPilot-${VERSION}.apk"
+          cp "$SRC" "$DEST"
+          echo "name=$DEST" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          ls -lh "$DEST"
+
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: CactusPilot ${{ steps.apk.outputs.version }}
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          body: |
+            Automated build of `${{ github.sha }}`.
+            Install on an **arm64** Android phone (allow installs from unknown sources).
+            Engine: Cactus `${{ env.CACTUS_REF }}`.
+          files: ${{ steps.apk.outputs.name }}
