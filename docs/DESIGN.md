@@ -2,19 +2,19 @@
 
 ## 1. Model catalog
 
-The catalog is data (`ModelCatalog.kt`), so models can be swapped without touching logic. URL pattern:
-`https://huggingface.co/Cactus-Compute/<repo>/resolve/main/<file>`
+The catalog is data (`ModelCatalog.kt`). It lists only **runnable bundles** for the pinned engine: the v2 engine refuses any folder that lacks `components/manifest.json`. These are the `*-cq4.zip` archives `cactus download` fetches from `Cactus-Compute/<model>` at the newest Hugging Face tag that is ≤ the engine version.
 
-| ID | Role | Repo / file | Size | Notes |
+URL pattern: `https://huggingface.co/Cactus-Compute/<repo>/resolve/<tag>/<file>`
+
+| ID | Role | Repo @ tag / file | Size | Notes |
 |---|---|---|---|---|
-| `lfm25-vl-450m` | Chat + vision (**default**) | `LFM2.5-VL-450M-cq` / `L1V4.zip` | ≈122 MB | Fast, fits any arm64 phone |
-| `lfm25-vl-450m-hq` | Chat + vision | `LFM2.5-VL-450M-cq` / `L3V4.zip` | ≈192 MB | Better quality |
-| `qwen3-0.6b` | Chat (text only) | `Qwen3-0.6B-cq` / `L2.zip` | ≈268 MB | Strong tool-use for size |
-| `gemma4-e2b` | Chat + vision (+audio) | `gemma-4-e2b-it-cq` / `A4V4L1.zip` | ≈1.4 GB | Highest quality; ≥ 8 GB RAM phones |
-| `whisper-tiny` | Speech-to-text (**default**) | `whisper-tiny-cq` / `CQ4.zip` | ≈22 MB | Fast, English-leaning |
-| `parakeet-v3` | Speech-to-text | `parakeet-tdt-0.6b-v3-cq` / `CQ4.zip` | ≈347 MB | More accurate, multilingual |
+| `lfm2-vl-450m` | Chat + vision (**default**) | `LFM2-VL-450M` @ `v2.0` / `lfm2-vl-450m-cq4.zip` | ≈383 MB | Fast, fits any arm64 phone |
+| `gemma4-e2b` | Chat + vision | `gemma-4-E2B-it` @ `v2.0.1` / `gemma-4-e2b-it-cq4.zip` | ≈2.7 GB | Highest quality; 8 GB+ RAM phones |
+| `whisper-base` | Speech-to-text (**default**) | `whisper-base` @ `v2.0` / `whisper-base-cq4.zip` | ≈113 MB | Fast |
+| `parakeet-v3` | Speech-to-text | `parakeet-tdt-0.6b-v3` @ `v2.2.2` / `parakeet-tdt-0.6b-v3-cq4.zip` | ≈384 MB | More accurate, multilingual |
 
-> **Verify on device.** Cactus bundle formats are still evolving. If a bundle fails `nativeInit`, the Models screen shows the engine error; fix by changing the file name in the catalog (the Hugging Face repo tree lists current files).
+> The `*-cq` repos and `weights/*-int4.zip` files on Hugging Face use an older bundle layout (`config.txt` + per-layer `.weights`, no `components/`) and **fail to load** on engine v2.2.2 ("Failed to create model - check config.txt exists"). After unpacking, the app verifies `config.txt` and `components/manifest.json` and reports a clear error otherwise.
+> Upgrading the engine: list the repo's tags, pick the newest ≤ engine version, pick the `cq4` zip, update the row.
 
 Selection rules: one active chat model, one active speech model, stored in `SharedPreferences`. A chat model flagged `vision=true` enables the image button.
 

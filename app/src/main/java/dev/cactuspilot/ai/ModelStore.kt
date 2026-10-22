@@ -24,6 +24,10 @@ class ModelStore(private val context: Context) {
     private val prefs = context.getSharedPreferences("models", Context.MODE_PRIVATE)
     private val root = File(context.filesDir, "models").apply { mkdirs() }
 
+    init {
+        pruneUnknown()
+    }
+
     private val _states = MutableStateFlow(
         ModelCatalog.all.associate { it.id to initialState(it) },
     )
@@ -33,6 +37,15 @@ class ModelStore(private val context: Context) {
         ModelRole.entries.associateWith { prefs.getString(activeKey(it), null) },
     )
     val active: StateFlow<Map<ModelRole, String?>> = _active
+
+    /** Deletes leftovers of models that are no longer in the catalog (frees space after catalog changes). */
+    private fun pruneUnknown() {
+        val known = ModelCatalog.all.map { it.id }.toSet()
+        root.listFiles()?.forEach { f ->
+            val id = f.name.removeSuffix(".installed").removeSuffix(".zip.part")
+            if (id !in known) f.deleteRecursively()
+        }
+    }
 
     private fun initialState(spec: ModelSpec) =
         if (marker(spec).exists()) ModelState.Installed else ModelState.NotInstalled
@@ -79,6 +92,7 @@ class ModelStore(private val context: Context) {
             target.mkdirs()
             unzipSafely(part(spec), target)
             part(spec).delete()
+            validateBundle(resolveBundleDir(target))
             marker(spec).writeText(System.currentTimeMillis().toString())
             setState(spec, ModelState.Installed)
             // First installed model of a role becomes active automatically.
@@ -152,6 +166,14 @@ class ModelStore(private val context: Context) {
                         outFile.outputStream().use { zis.copyTo(it) }
                     }
                 }
+            }
+        }
+
+        /** A runnable v2 bundle has config.txt and components/manifest.json at its root. */
+        fun validateBundle(dir: File) {
+            val missing = listOf("config.txt", "components/manifest.json").filter { !File(dir, it).exists() }
+            if (missing.isNotEmpty()) {
+                throw IOException("Not a runnable Cactus bundle (missing ${missing.joinToString()})")
             }
         }
 

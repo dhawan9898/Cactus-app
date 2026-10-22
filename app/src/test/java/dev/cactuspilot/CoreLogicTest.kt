@@ -75,6 +75,25 @@ class CoreLogicTest {
     @Test fun catalogHasDefaultsForEachRole() {
         for (role in dev.cactuspilot.ai.ModelRole.entries) assertTrue(ModelCatalog.forRole(role).isNotEmpty())
         assertTrue(ModelCatalog.all.all { it.url.startsWith("https://huggingface.co/Cactus-Compute/") })
+        assertEquals(
+            "https://huggingface.co/Cactus-Compute/LFM2-VL-450M/resolve/v2.0/lfm2-vl-450m-cq4.zip",
+            ModelCatalog.defaultFor(dev.cactuspilot.ai.ModelRole.CHAT).url,
+        )
+        assertEquals(ModelCatalog.all.size, ModelCatalog.all.map { it.id }.toSet().size)
+    }
+
+    @Test fun bundleValidationRequiresManifest() {
+        val dir = File.createTempFile("bundle2", "").apply { delete(); mkdirs() }
+        File(dir, "config.txt").writeText("x")
+        try {
+            ModelStore.validateBundle(dir)
+            fail("expected IOException")
+        } catch (e: java.io.IOException) {
+            assertTrue(e.message!!.contains("components/manifest.json"))
+        }
+        File(dir, "components").mkdirs()
+        File(dir, "components/manifest.json").writeText("{}")
+        ModelStore.validateBundle(dir)
     }
 
     @Test fun unzipBlocksZipSlip() {

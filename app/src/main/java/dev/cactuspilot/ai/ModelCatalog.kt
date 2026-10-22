@@ -7,48 +7,44 @@ data class ModelSpec(
     val title: String,
     val role: ModelRole,
     val repo: String,
+    /** Hugging Face git tag the engine release is compatible with (what `cactus download` resolves). */
+    val revision: String,
     val file: String,
     val sizeMb: Int,
     val vision: Boolean = false,
     val note: String = "",
 ) {
-    val url: String get() = "https://huggingface.co/Cactus-Compute/$repo/resolve/main/$file"
+    val url: String get() = "https://huggingface.co/Cactus-Compute/$repo/resolve/$revision/$file"
 }
 
 /**
- * Data-driven catalog. If a bundle fails to load after an engine upgrade, check the repo tree on
- * Hugging Face and adjust `file` here; no other code needs to change.
+ * Data-driven catalog of *runnable bundles* for the pinned engine (Cactus v2.2.2).
+ *
+ * The v2 engine only loads bundles that contain `components/manifest.json`. These are the `*-cq4.zip`
+ * archives that `cactus download` fetches from `Cactus-Compute/<model>` at the newest HF tag that is
+ * <= the engine version. When upgrading the engine, re-run that resolution (list tags, pick newest
+ * <= engine version, pick the `cq4` zip) and update the rows below.
  */
 object ModelCatalog {
     val all: List<ModelSpec> = listOf(
         ModelSpec(
-            "lfm25-vl-450m", "LFM2.5-VL 450M (fast)", ModelRole.CHAT,
-            "LFM2.5-VL-450M-cq", "L1V4.zip", 122, vision = true,
+            "lfm2-vl-450m", "LFM2-VL 450M (fast)", ModelRole.CHAT,
+            "LFM2-VL-450M", "v2.0", "lfm2-vl-450m-cq4.zip", 383, vision = true,
             note = "Chat + image understanding. Best default for most phones.",
         ),
         ModelSpec(
-            "lfm25-vl-450m-hq", "LFM2.5-VL 450M (better quality)", ModelRole.CHAT,
-            "LFM2.5-VL-450M-cq", "L3V4.zip", 192, vision = true,
-            note = "Same model, higher-precision bundle.",
-        ),
-        ModelSpec(
-            "qwen3-0.6b", "Qwen3 0.6B", ModelRole.CHAT,
-            "Qwen3-0.6B-cq", "L2.zip", 268,
-            note = "Text only; good at following tool instructions.",
-        ),
-        ModelSpec(
             "gemma4-e2b", "Gemma 4 E2B (large)", ModelRole.CHAT,
-            "gemma-4-e2b-it-cq", "A4V4L1.zip", 1415, vision = true,
-            note = "Highest quality. Recommended for phones with 8 GB+ RAM.",
+            "gemma-4-E2B-it", "v2.0.1", "gemma-4-e2b-it-cq4.zip", 2721, vision = true,
+            note = "Highest quality, big download. Recommended for phones with 8 GB+ RAM.",
         ),
         ModelSpec(
-            "whisper-tiny", "Whisper Tiny (voice input)", ModelRole.SPEECH,
-            "whisper-tiny-cq", "CQ4.zip", 22,
-            note = "Fast speech-to-text, English-leaning.",
+            "whisper-base", "Whisper Base (voice input)", ModelRole.SPEECH,
+            "whisper-base", "v2.0", "whisper-base-cq4.zip", 113,
+            note = "Fast speech-to-text.",
         ),
         ModelSpec(
             "parakeet-v3", "Parakeet TDT 0.6B v3 (voice input)", ModelRole.SPEECH,
-            "parakeet-tdt-0.6b-v3-cq", "CQ4.zip", 347,
+            "parakeet-tdt-0.6b-v3", "v2.2.2", "parakeet-tdt-0.6b-v3-cq4.zip", 384,
             note = "More accurate and multilingual.",
         ),
     )
