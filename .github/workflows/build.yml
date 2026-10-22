@@ -18,22 +18,23 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
-
       - name: Install NDK and CMake
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "ndk;${NDK_VERSION}" "cmake;3.22.1"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKM" || SDKM=$(command -v sdkmanager)
+          yes | "$SDKM" --licenses >/dev/null || true
+          "$SDKM" "ndk;${NDK_VERSION}" "cmake;3.22.1"
 
       - name: Fetch Cactus engine source
         run: git clone --depth 1 --branch "$CACTUS_REF" https://github.com/cactus-compute/cactus.git vendor/cactus
